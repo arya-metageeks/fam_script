@@ -2,63 +2,85 @@ import { ethers } from 'ethers';
 import dotenv from 'dotenv';
 import fs from 'fs';
 import express, { Request, Response } from 'express';
+import  { formatDistanceToNow} from 'date-fns';
 import mongoose from 'mongoose';
 import bodyParser from 'body-parser';
 
 dotenv.config();
 
 const app = express();
-const port = process.env.PORT ||3000;
+const port = 3000;
 
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
 
-mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/minting_db',{dbName:"FamProtocolData"});
+mongoose.connect(process.env.MONGODB_URI!,{dbName:process.env.DB_NAME});
 
 const walletSchema = new mongoose.Schema({
   privateKey: String,
   publicKey: String,
   fundedWalletPublicKey: String,
   mintTransactionHash: String,
+  domain:String,
+  created_at:Date
 });
 
 const Wallet = mongoose.model('Wallet', walletSchema);
 
 const upgradableContractABI = JSON.parse(fs.readFileSync('./abi/upgradableContract.json', 'utf-8'));
 const usdtABI = JSON.parse(fs.readFileSync('./abi/usdt.json', 'utf-8'));
+const provider = new ethers.JsonRpcProvider(process.env.RPC_URL);
 
-async function mint_domains(fundedWalletPrivateKey: string, domainsCount: number) {
-  const USDT_CONTRACT_ADDRESS = process.env.USDT_ADDRESS;
-  const TARGET_CONTRACT_ADDRESS = process.env.CONTRACT_ADDRESS;
-  if (!USDT_CONTRACT_ADDRESS || !TARGET_CONTRACT_ADDRESS) {
+const USDT_CONTRACT_ADDRESS = process.env.USDT_ADDRESS;
+const TARGET_CONTRACT_ADDRESS = process.env.CONTRACT_ADDRESS;
+if (!USDT_CONTRACT_ADDRESS || !TARGET_CONTRACT_ADDRESS) {
     throw new Error("Addresses not provided");
-  }
-  const provider = new ethers.JsonRpcProvider('https://sepolia-rollup.arbitrum.io/rpc');
+}
+async function mint_domains(fundedWalletPrivateKey: string, domainsCount: number) {
   const wallet = new ethers.Wallet(fundedWalletPrivateKey, provider);
 
-  const usdtContract = new ethers.Contract(USDT_CONTRACT_ADDRESS, usdtABI, wallet);
-  const targetContract = new ethers.Contract(TARGET_CONTRACT_ADDRESS, upgradableContractABI, wallet);
-
+  const usdtContract = new ethers.Contract(USDT_CONTRACT_ADDRESS!, usdtABI, wallet);
+  const targetContract = new ethers.Contract(TARGET_CONTRACT_ADDRESS!, upgradableContractABI, wallet);
   for (let i = 0; i < domainsCount; i++) {
-    try {
+      try {
+          // Check USDT balance before proceeding
+          
+        const usdtBalance = await usdtContract.balanceOf(wallet.address);
+      if (usdtBalance<(ethers.parseUnits('5', 6))) {
+        console.log("Insufficient USDT balance. Stopping minting process.");
+        return;
+      }
+
       const newWallet = ethers.Wallet.createRandom().connect(provider);
       console.log(`New wallet address: ${newWallet.address}`);
+      const usdtAmount = ethers.parseUnits('5', 6);
 
-      const ethAmount = ethers.parseEther('0.0001');
+    //   @ts-ignore
+      const approveGasEstimate = await usdtContract.connect(newWallet).estimateGas.approve(TARGET_CONTRACT_ADDRESS, usdtAmount);
+      const domain = `domain${Math.floor(Math.random()*1000)}`;
+      const referralCode = '6a4b7815';
+      //@ts-ignore
+      const mintGasEstimate = await targetContract.connect(newWallet).estimateGas.mintDomainWithReferral(domain, referralCode);
+
+      // Calculate total gas fee in ETH
+    //   @ts-ignore
+      const gasPrice = await provider.getGasPrice();
+      const totalGasEstimate = approveGasEstimate.add(mintGasEstimate);
+      const totalGasFee = totalGasEstimate.mul(gasPrice);
+      const finalGasFeesWithAddedSafety  =totalGasFee.add(ethers.parseEther('0.0001'))
+      console.log({finalGasFeesWithAddedSafety})
       const ethTx = await wallet.sendTransaction({
         to: newWallet.address,
-        value: ethAmount
+        value: finalGasFeesWithAddedSafety
       });
       await ethTx.wait();
       console.log(`Sent 0.001 ETH to ${newWallet.address}`);
 
-      const usdtAmount = ethers.parseUnits('5', 6);
       const usdtTx = await usdtContract.transfer(newWallet.address, usdtAmount);
       await usdtTx.wait();
       console.log(`Sent 5 USDT to ${newWallet.address}`);
 
-      const domain = `domain${Math.floor(Math.random()*1000)}`;
-      const referralCode = '6a4b7815';
+
       //@ts-ignore
       const approveTx = await usdtContract.connect(newWallet).approve(TARGET_CONTRACT_ADDRESS, usdtAmount);
       await approveTx.wait();
@@ -73,8 +95,10 @@ async function mint_domains(fundedWalletPrivateKey: string, domainsCount: number
       const walletData = new Wallet({
         privateKey: newWallet.privateKey,
         publicKey: newWallet.address,
-        fundedWalletPublicKey: wallet.address,
+        fundedWalletPublicKey: wallet.address.toLowerCase(),
         mintTransactionHash: receipt.hash,
+        created_at:new Date(),
+        domain
       });
       await walletData.save();
       console.log(`Saved wallet data to MongoDB`);
@@ -85,65 +109,159 @@ async function mint_domains(fundedWalletPrivateKey: string, domainsCount: number
   }
 }
 
-app.get('/', (req:Request, res:Response) => {
-  const html = `
-    <!DOCTYPE html>
-    <html lang="en">
-    <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Domain Minting</title>
-        <style>
-            body { font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; }
-            form { display: flex; flex-direction: column; }
-            input, button { margin: 10px 0; padding: 10px; }
-            #loader { display: none; text-align: center; }
-        </style>
-    </head>
-    <body>
-        <h1>Domain Minting</h1>
-        <form id="mintForm">
-            <input type="text" id="privateKey" name="privateKey" placeholder="Private Key" required>
-            <input type="number" id="domainCount" name="domainCount" placeholder="Domain Count" required>
-            <button type="submit">Start Minting</button>
-        </form>
-        <div id="loader">Minting in progress... Please wait.</div>
-        <script>
-            document.getElementById('mintForm').addEventListener('submit', async (e) => {
-                e.preventDefault();
-                const privateKey = document.getElementById('privateKey').value;
-                const domainCount = document.getElementById('domainCount').value;
-                document.getElementById('loader').style.display = 'block';
-                try {
-                    const response = await fetch('/mint', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ private_key: privateKey, domain_count: domainCount })
-                    });
-                    const result = await response.json();
-                    alert(result.message);
-                } catch (error) {
-                    alert('An error occurred during minting.');
-                } finally {
-                    document.getElementById('loader').style.display = 'none';
-                }
-            });
-        </script>
-    </body>
-    </html>
-  `;
-  res.send(html);
-});
 
-app.post('/mint', async (req:Request, res:Response) => {
+app.post('/mint', async (req, res) => {
   const { private_key, domain_count } = req.body;
   try {
-    await mint_domains(private_key, parseInt(domain_count));
-    res.json({ message: 'Minting completed successfully' });
-  } catch (error) {
-    console.error('Error during minting:', error);
-    res.status(500).json({ message: 'An error occurred during minting' });
+    const wallet = new ethers.Wallet(private_key,provider);
+
+  const usdtContract = new ethers.Contract(USDT_CONTRACT_ADDRESS, usdtABI, wallet);
+    const usdtBalance = await usdtContract.balanceOf(wallet.address);
+  const maxMintCount = Math.floor(Number(usdtBalance) / Number(ethers.parseUnits('5', 6)))
+  if(domain_count>maxMintCount){
+    res.send({message:"Error:You can mint at max"+maxMintCount + " domains"})
+    return
   }
+    res.json({ message: 'Minting started successfully! Please link below to see mint data live!', publicKey: wallet.address });
+    await mint_domains(private_key, parseInt(domain_count));
+  } catch (error:any) {
+    console.error('Error during minting:', error);
+    res.status(500).json({ message:error.message || 'An error occurred during minting' });
+  }
+});
+
+app.get('/', (req, res) => {
+    const html = `
+      <!DOCTYPE html>
+      <html lang="en">
+      <head>
+          <meta charset="UTF-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
+          <title>Domain Minting</title>
+          <style>
+              body { font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; }
+              form { display: flex; flex-direction: column; }
+              input, button { margin: 10px 0; padding: 10px; }
+              #loader { display: none; text-align: center; }
+          </style>
+      </head>
+      <body>
+          <h1>Domain Minting</h1>
+          <form id="mintForm">
+              <input type="password" id="privateKey" name="privateKey" placeholder="Private Key" required>
+              <input type="number" id="domainCount" name="domainCount" placeholder="Domain Count" required>
+              <button type="submit">Start Minting</button>
+          </form>
+          <div id="loader">Minting in progress... Please wait.</div>
+          <div id="result">
+          <a href="/">View minting data</a>
+          </div>
+          <script>
+              document.getElementById('mintForm').addEventListener('submit', async (e) => {
+                  e.preventDefault();
+                  const privateKey = document.getElementById('privateKey').value;
+                  const domainCount = document.getElementById('domainCount').value;
+                  document.getElementById('loader').style.display = 'block';
+                  try {
+                      const response = await fetch('/mint', {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ private_key: privateKey, domain_count: domainCount })
+                      });
+                      const result = await response.json();
+                      alert(result.message);
+                  } catch (error) {
+                      alert('An error occurred during minting.');
+                  } finally {
+                      document.getElementById('loader').style.display = 'none';
+                  }
+              });
+          </script>
+      </body>
+      </html>
+    `;
+    res.send(html);
+  });
+// @ts-ignore
+app.get("/data", async (req, res) => {
+  
+    try {
+      const entries = await Wallet.find({ });
+    console.log(entries)
+      if (entries.length === 0) {
+        return res.send(`<body>
+            <h1>No entries found!Page is going to refresh in 5 seconds <a href="/">MINT</a></h1>
+            <script>
+                setInterval(() => {
+                    location.reload();
+                }, 5000);
+            </script>
+            <body>`);
+      }
+  
+      // Create HTML table with the data
+      const tableRows = entries.map((entry,index) => `
+        <tr>
+          <td>${index+1}</td>
+          <td>${entry.domain}</td>
+          <td title="${entry.publicKey?.slice(0,12)}">${entry.publicKey?.slice(0,12)}</td>
+          <td title="${entry.fundedWalletPublicKey?.slice(0,12)}">${entry.fundedWalletPublicKey?.slice(0,12)}</td>
+          <td><a href="${process.env.EXPLORER_URL}/tx/${entry.mintTransactionHash}" target="_blank">View Transaction</a></td>
+          <td>${ formatDistanceToNow(new Date(entry.created_at?.toDateString()!),{includeSeconds:true}) }</td>
+        </tr>
+      `).join('');
+  
+      const html = `
+        <!DOCTYPE html>
+        <html lang="en">
+        <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>Minting Data</title>
+
+            <style>
+                body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
+                table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+                th, td { border: 1px solid #ddd; padding: 12px; text-align: left; }
+                th { background-color: #f2f2f2; }
+                tr:nth-child(even) { background-color: #f9f9f9; }
+                h1 { color: #333; }
+            </style>
+        </head>
+        <body>
+            <h1>Minting Data</h1>
+            <h5>page refresh every 10 sec</h5>
+            
+            <table>
+                <thead>
+                    <tr>
+
+                        <th>No</th>
+                        <th>Domain</th>
+                        <th>Minted Wallet Public Key</th>
+                        <th>Fund Wallet Public Key</th>
+                        <th>Mint Transaction</th>
+                        <th>Minted at</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${tableRows}
+                </tbody>
+            </table>
+        </body>
+        <script>
+                setInterval(() => {
+                    location.reload();
+                }, 10000);
+            </script>
+        </html>
+      `;
+  
+      res.send(html);
+    } catch (error) {
+      console.error('Error fetching data:', error);
+      res.status(500).send('<h1>An error occurred while fetching data</h1>');
+    }
 });
 
 app.listen(port, () => {
