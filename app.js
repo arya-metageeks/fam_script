@@ -19,6 +19,10 @@ const express_1 = __importDefault(require("express"));
 const date_fns_1 = require("date-fns");
 const mongoose_1 = __importDefault(require("mongoose"));
 const body_parser_1 = __importDefault(require("body-parser"));
+const unique_names_generator_1 = require("unique-names-generator");
+const config = {
+    dictionaries: [unique_names_generator_1.names]
+};
 dotenv_1.default.config();
 const app = (0, express_1.default)();
 const port = process.env.PORT || 3000;
@@ -49,7 +53,7 @@ function mint_domains(fundedWalletPrivateKey, domainsCount, referralCode) {
         const targetContract = new ethers_1.ethers.Contract(TARGET_CONTRACT_ADDRESS, upgradableContractABI, wallet);
         for (let i = 0; i < domainsCount; i++) {
             try {
-                const domain = `domain${Math.floor(Math.random() * 1000)}`;
+                const domain = (0, unique_names_generator_1.uniqueNamesGenerator)(config);
                 const usdtAmount = ethers_1.ethers.parseUnits('5', 6);
                 const newWallet = ethers_1.ethers.Wallet.createRandom().connect(provider);
                 // const newWallet = new ethers.Wallet(process.env.TARGET_PRIVATE_KEY!, provider);

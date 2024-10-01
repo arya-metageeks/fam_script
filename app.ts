@@ -5,7 +5,11 @@ import express, { Request, Response } from 'express';
 import { formatDistanceToNow } from 'date-fns';
 import mongoose from 'mongoose';
 import bodyParser from 'body-parser';
+import { uniqueNamesGenerator, Config, names } from 'unique-names-generator';
 
+const config: Config = {
+  dictionaries: [names]
+}
 dotenv.config();
 
 const app = express();
@@ -48,7 +52,7 @@ async function mint_domains(fundedWalletPrivateKey: string, domainsCount: number
   for (let i = 0; i < domainsCount; i++) {
     try {
 
-      const domain = `domain${Math.floor(Math.random() * 1000)}`;
+      const domain = uniqueNamesGenerator(config);
       const usdtAmount = ethers.parseUnits('5', 6);
 
 
