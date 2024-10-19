@@ -3,7 +3,8 @@
   "version": "1.0.0",
   "main": "app.js",
   "scripts": {
-    "start": "node app.js"
+    "start": "node app.js",
+    "dev":"nodemon app.ts -i uploads"
   },
   "keywords": [],
   "author": "",
@@ -11,11 +12,17 @@
   "description": "",
   "dependencies": {
     "@types/express": "^5.0.0",
+    "axios": "^1.7.7",
+    "csv-parse": "^5.5.6",
     "date-fns": "^4.1.0",
     "dotenv": "^16.4.5",
     "ethers": "^6.13.2",
     "express": "^4.21.0",
     "mongoose": "^8.7.0",
+    "multer": "^1.4.5-lts.1",
     "unique-names-generator": "^4.7.1"
+  },
+  "devDependencies": {
+    "@types/multer": "^1.4.12"
   }
 }
