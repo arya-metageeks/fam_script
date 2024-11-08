@@ -44,11 +44,11 @@ const upgradableContractABI = JSON.parse(fs.readFileSync('./abi/upgradableContra
 // const usdtABI = JSON.parse(fs.readFileSync('./abi/usdt.json', 'utf-8'));
 const provider = new ethers.JsonRpcProvider(process.env.RPC_URL);
 
-const USDT_CONTRACT_ADDRESS = process.env.USDT_ADDRESS;
+// const USDT_CONTRACT_ADDRESS = process.env.USDT_ADDRESS;
 const TARGET_CONTRACT_ADDRESS = process.env.CONTRACT_ADDRESS;
-if (!USDT_CONTRACT_ADDRESS || !TARGET_CONTRACT_ADDRESS) {
-  throw new Error("Addresses not provided");
-}
+// if (!USDT_CONTRACT_ADDRESS || !TARGET_CONTRACT_ADDRESS) {
+//   throw new Error("Addresses not provided");
+// }
 
 // Set up multer for file upload
 const upload = multer({ dest: 'uploads/' });
