@@ -12,11 +12,17 @@ import axios from 'axios';
 const config: Config = {
   dictionaries: [names]
 }
+
+interface CoinGeckoResponse {
+  ethereum: {
+    usd: number;
+  };
+}
+
 dotenv.config();
 const BUFFERED_ETH_MULTIPLIER = Number(process.env.BUFFERED_ETH_MULTIPLIER) || 10
 const app = express();
 const port = process.env.PORT || 3000;
-
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
@@ -32,9 +38,10 @@ const walletSchema = new mongoose.Schema({
   status: String
 });
 
+let latest_price;
 const Wallet = mongoose.model('Wallet', walletSchema);
 const upgradableContractABI = JSON.parse(fs.readFileSync('./abi/upgradableContract.json', 'utf-8'));
-const usdtABI = JSON.parse(fs.readFileSync('./abi/usdt.json', 'utf-8'));
+// const usdtABI = JSON.parse(fs.readFileSync('./abi/usdt.json', 'utf-8'));
 const provider = new ethers.JsonRpcProvider(process.env.RPC_URL);
 
 const USDT_CONTRACT_ADDRESS = process.env.USDT_ADDRESS;
@@ -88,21 +95,58 @@ function parseCSV(filePath: string): Promise<{ domain: string; pfp: string }[]> 
       .on('error', (error) => reject(error));
   });
 }
-function addFamSuffix(str:string) {
-  if(!str){
+function addFamSuffix(str: string) {
+  if (!str) {
     return str
   }
   if (!str.endsWith('.fam')) {
-      return str + '.fam';  
+    return str + '.fam';
   }
-  return str;  
+  return str;
 }
+
+const fetchEthPrice = async (): Promise<number> => {
+  try {
+    const response = await axios.get<CoinGeckoResponse>(
+      "https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd"
+    );
+    return response.data.ethereum.usd;
+  } catch (error) {
+    console.error("Error fetching ETH price:", error);
+    throw error;
+  }
+};
+
+const calculateEthForUSD = async (usdAmount: number = 5): Promise<ethers.BigNumberish | undefined> => {
+  try {
+    // Assuming fetchEthPrice() retrieves the current ETH price in USD
+    const ethPriceInUSD = await fetchEthPrice();
+    // console.log("Current ETH price in USD:", ethPriceInUSD);
+
+    // Calculate the required ETH equivalent to the given USD amount
+    const ethAmount = (usdAmount / ethPriceInUSD).toFixed(18); // 18 decimal places for precision in ETH
+    console.log(`ETH equivalent for $${usdAmount} USD:`, ethAmount);
+
+    // Convert ethAmount to a BigNumber for further use in contract interactions
+    const ethAmountBN: ethers.BigNumberish = ethers.parseUnits(ethAmount, 18);
+    console.log(
+      "ETH amount in wei (BigNumber format):",
+      ethAmountBN.toString()
+    );
+
+    // You can now use ethAmountBN in your contract interactions or send as a payment amount
+    return ethAmountBN;
+  } catch (error) {
+    console.error("Error fetching or calculating ETH amount:", error);
+  }
+};
 
 async function mint_domains(fundedWalletPrivateKey: string, referralCode: string, csvData: { domain: string; pfp: string }[]) {
   const wallet = new ethers.Wallet(fundedWalletPrivateKey, provider);
 
-  const usdtContract = new ethers.Contract(USDT_CONTRACT_ADDRESS!, usdtABI, wallet);
+  // const usdtContract = new ethers.Contract(USDT_CONTRACT_ADDRESS!, usdtABI, wallet);
   const targetContract = new ethers.Contract(TARGET_CONTRACT_ADDRESS!, upgradableContractABI, wallet);
+
   for (let i = 0; i < csvData.length; i++) {
     const csvRow = csvData[i];
     try {
@@ -112,7 +156,8 @@ async function mint_domains(fundedWalletPrivateKey: string, referralCode: string
         return;
       }
       console.log("starting minting for domain:", domain)
-      const usdtAmount = ethers.parseUnits('5', 6);
+      // const usdtAmount = ethers.parseUnits('5', 6);
+      const costPerMint = await calculateEthForUSD();
 
       const newWallet = ethers.Wallet.createRandom().connect(provider);
       console.log(`New wallet address: ${newWallet.address}`);
@@ -131,19 +176,35 @@ async function mint_domains(fundedWalletPrivateKey: string, referralCode: string
       const gasPrice = feeData.gasPrice!
       console.log({ feeData })
 
+      if (!wallet.provider) {
+        throw new Error('Provider not properly initialized');
+      }
+      if (!costPerMint) {
+        console.log("Error: Unable to calculate cost per mint.");
+        return;
+      }
       // Check USDT balance before proceeding
-      const usdtBalance = await usdtContract.balanceOf(wallet.address);
-      console.log({ usdtBalanceInFundedWallet: usdtBalance })
-      if (usdtBalance < (ethers.parseUnits('5', 6))) {
+
+      // const usdtBalance = await usdtContract.balanceOf(wallet.address);
+      const ethBalance = await wallet.provider.getBalance(wallet.address);
+      console.log({ ethBalanceInFundedWallet: ethBalance })
+      if (ethBalance.toString() < costPerMint) {
         console.log("Insufficient USDT balance. Stopping minting process.");
         return;
       }
 
       // Estimate gas for approve transaction
       // @ts-ignore
-      const approveGasEstimate = await usdtContract.connect(newWallet).approve.estimateGas(TARGET_CONTRACT_ADDRESS, usdtAmount);
+      // const approveGasEstimate = await usdtContract.connect(newWallet).approve.estimateGas(TARGET_CONTRACT_ADDRESS, usdtAmount);
 
-      const totalGasBuffer = approveGasEstimate * BigInt(BUFFERED_ETH_MULTIPLIER)
+      const mintGasEstimate = await targetContract.connect(newWallet).mintDomainWithReferral.estimateGas(
+        domain,
+        referralCode,
+        { value: costPerMint }
+      );
+
+      // const totalGasBuffer = approveGasEstimate * BigInt(BUFFERED_ETH_MULTIPLIER)
+      const totalGasBuffer = mintGasEstimate * BigInt(BUFFERED_ETH_MULTIPLIER)
       const requiredEth = totalGasBuffer * gasPrice;
       console.log({ requiredEth: ethers.formatEther(requiredEth) })
 
@@ -155,16 +216,16 @@ async function mint_domains(fundedWalletPrivateKey: string, referralCode: string
       console.log(`Sent ${ethers.formatEther(requiredEth)} ETH to ${newWallet.address}`);
 
       // @ts-ignore
-      const approveTx = await usdtContract.connect(newWallet).approve(TARGET_CONTRACT_ADDRESS, usdtAmount);
-      await approveTx.wait();
-      console.log(`Approved 5 USDT for spending by ${TARGET_CONTRACT_ADDRESS}`);
+      // const approveTx = await usdtContract.connect(newWallet).approve(TARGET_CONTRACT_ADDRESS, usdtAmount);
+      // await approveTx.wait();
+      // console.log(`Approved 5 USDT for spending by ${TARGET_CONTRACT_ADDRESS}`);
 
-      const usdtTx = await usdtContract.transfer(newWallet.address, usdtAmount);
-      await usdtTx.wait();
-      console.log(`Sent 5 USDT to ${newWallet.address}`);
+      // const usdtTx = await usdtContract.transfer(newWallet.address, usdtAmount);
+      // await usdtTx.wait();
+      // console.log(`Sent 5 USDT to ${newWallet.address}`);
 
       // @ts-ignore
-      const mintTx = await targetContract.connect(newWallet).mintDomainWithReferral(domain, referralCode);
+      const mintTx = await targetContract.connect(newWallet).mintDomainWithReferral(domain, referralCode, costPerMint, {value: costPerMint});
       const receipt = await mintTx.wait();
       console.log(`Called mintDomainWithReferral for ${domain}`);
 
@@ -184,7 +245,7 @@ async function mint_domains(fundedWalletPrivateKey: string, referralCode: string
     } catch (error) {
       console.error(`Error in iteration ${csvRow}:`, error);
     }
-    
+
   }
 }
 
@@ -200,10 +261,19 @@ app.post('/mint', upload.single('csvFile'), async (req, res) => {
     console.log({ private_key, referral_code, csvData })
 
     const wallet = new ethers.Wallet(private_key, provider);
+    if (!wallet.provider) {
+      throw new Error('Provider not properly initialized');
+    }
+    // const usdtContract = new ethers.Contract(USDT_CONTRACT_ADDRESS, usdtABI, wallet);
+    // const usdtBalance = await usdtContract.balanceOf(wallet.address);
+    // const maxMintCount = Math.floor(Number(usdtBalance) / Number(ethers.parseUnits('5', 6)))
 
-    const usdtContract = new ethers.Contract(USDT_CONTRACT_ADDRESS, usdtABI, wallet);
-    const usdtBalance = await usdtContract.balanceOf(wallet.address);
-    const maxMintCount = Math.floor(Number(usdtBalance) / Number(ethers.parseUnits('5', 6)))
+    //Checking Ethereum Balance
+    const ethBalance = await wallet.provider.getBalance(wallet.address);
+    // const costPerMint = ethers.parseEther('0.05'); // 0.05 ETH per mint
+    const costPerMint = await calculateEthForUSD();
+    const maxMintCount = Math.floor(Number(ethBalance) / Number(costPerMint));
+
     if (!Array.isArray(csvData) || csvData.length == 0)
       if (csvData.length > maxMintCount) {
         res.send({ message: "Error: You can mint at max " + maxMintCount + " domains" })
