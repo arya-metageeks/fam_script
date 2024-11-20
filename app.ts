@@ -157,7 +157,7 @@ async function mint_domains(fundedWalletPrivateKey: string, referralCode: string
       }
       console.log("starting minting for domain:", domain)
       // const usdtAmount = ethers.parseUnits('5', 6);
-      const costPerMint = await calculateEthForUSD();
+      // const costPerMint = await calculateEthForUSD();
 
       const newWallet = ethers.Wallet.createRandom().connect(provider);
       console.log(`New wallet address: ${newWallet.address}`);
@@ -179,19 +179,19 @@ async function mint_domains(fundedWalletPrivateKey: string, referralCode: string
       if (!wallet.provider) {
         throw new Error('Provider not properly initialized');
       }
-      if (!costPerMint) {
-        console.log("Error: Unable to calculate cost per mint.");
-        return;
-      }
+      // if (!costPerMint) {
+      //   console.log("Error: Unable to calculate cost per mint.");
+      //   return;
+      // }
       // Check USDT balance before proceeding
 
       // const usdtBalance = await usdtContract.balanceOf(wallet.address);
-      const ethBalance = await wallet.provider.getBalance(wallet.address);
-      console.log({ ethBalanceInFundedWallet: ethBalance })
-      if (ethBalance.toString() < costPerMint) {
-        console.log("Insufficient USDT balance. Stopping minting process.");
-        return;
-      }
+      // const ethBalance = await wallet.provider.getBalance(wallet.address);
+      // console.log({ ethBalanceInFundedWallet: ethBalance })
+      // if (ethBalance.toString() < costPerMint) {
+      //   console.log("Insufficient USDT balance. Stopping minting process.");
+      //   return;
+      // }
 
       // Estimate gas for approve transaction
       // @ts-ignore
@@ -199,9 +199,15 @@ async function mint_domains(fundedWalletPrivateKey: string, referralCode: string
 
       const mintGasEstimate = await targetContract.connect(newWallet).mintDomainWithReferral.estimateGas(
         domain,
-        referralCode,
-        { value: costPerMint }
+        referralCode
+        // { value: costPerMint }
       );
+
+      // mintGasEstimate = await targetContract.connect(newWallet).mintDomainWithReferral.estimateGas(
+      //   domain,
+      //   referralCode,
+      //   { value: costPerMint }
+      // );
 
       // const totalGasBuffer = approveGasEstimate * BigInt(BUFFERED_ETH_MULTIPLIER)
       const totalGasBuffer = mintGasEstimate * BigInt(BUFFERED_ETH_MULTIPLIER)
@@ -225,7 +231,8 @@ async function mint_domains(fundedWalletPrivateKey: string, referralCode: string
       // console.log(`Sent 5 USDT to ${newWallet.address}`);
 
       // @ts-ignore
-      const mintTx = await targetContract.connect(newWallet).mintDomainWithReferral(domain, referralCode, costPerMint, {value: costPerMint});
+      // const mintTx = await targetContract.connect(newWallet).mintDomainWithReferral(domain, referralCode, costPerMint, {value: costPerMint});
+      const mintTx = await targetContract.connect(newWallet).mintDomainWithReferral(domain, referralCode);
       const receipt = await mintTx.wait();
       console.log(`Called mintDomainWithReferral for ${domain}`);
 
@@ -269,16 +276,17 @@ app.post('/mint', upload.single('csvFile'), async (req, res) => {
     // const maxMintCount = Math.floor(Number(usdtBalance) / Number(ethers.parseUnits('5', 6)))
 
     //Checking Ethereum Balance
-    const ethBalance = await wallet.provider.getBalance(wallet.address);
+
+    // const ethBalance = await wallet.provider.getBalance(wallet.address);
     // const costPerMint = ethers.parseEther('0.05'); // 0.05 ETH per mint
-    const costPerMint = await calculateEthForUSD();
-    const maxMintCount = Math.floor(Number(ethBalance) / Number(costPerMint));
+    // const costPerMint = await calculateEthForUSD();
+    // const maxMintCount = Math.floor(Number(ethBalance) / Number(costPerMint));
 
     if (!Array.isArray(csvData) || csvData.length == 0)
-      if (csvData.length > maxMintCount) {
-        res.send({ message: "Error: You can mint at max " + maxMintCount + " domains" })
-        return
-      }
+      // if (csvData.length > maxMintCount) {
+      //   res.send({ message: "Error: You can mint at max " + maxMintCount + " domains" })
+      //   return
+      // }
 
 
 
